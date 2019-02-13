@@ -77,32 +77,23 @@ clear empty_cells signals_training signals_testing raw_context_train raw_context
 disp('Predicting Contexts');
 
 pred_lag = 5;
-energy_cost = 0.01;
+threshold = 10;
 
 feature_model = importdata('../Results/MTGP/feature_model.mat');
-signal_means = feature_model.means;
-pca_coeffs = feature_model.pca_coeffs;
-
-% % Apply PCA Preprocessing?
-% signals_training = cell(length(signals_train), 1);
-% for j = 1 : num_contexts
-% 	for i = 1 : length(signals_train)
-% 		signals_training{i} = zeros(size(signals_train{i}, 1), size(pca_coeffs{j}, 2));
-% 	end
-% end
-% for j = 1 : num_contexts
-% 	for i = 1 : length(signals_train)
-% 		signals_training{i}(context_train{i} == j, :) = (signals_train{i}(context_train{i} == j, :) - signal_means{j}{i}) * pca_coeffs{j};
-% 	end
-% end
-% signals_train = signals_training;
+feature_model.means(end) = [];
+feature_model.pca_coeffs(end) = [];
 
 hmm_model = importdata('../Results/MTGP/hmm_model.mat');
 hmm_model = hmm_model + 1;
+hmm_model(:, end) = [];
+hmm_model(end, :) = [];
 hmm_model = hmm_model ./ sum(hmm_model);
 
 gamma_model = importdata('../Results/MTGP_mattern5/gamma_model.mat');
+gamma_model(end) = [];
+
 gp_model = importdata('../Results/MTGP_mattern5/gp_model.mat');
+gp_model.coeffs(end) = [];
 
 model = struct;
 model.feature_model = feature_model;
@@ -113,22 +104,58 @@ max_duration = 1;
 
 all_predictions = cell(length(signals_train), 1);
 all_alpha_prob = cell(length(signals_train), 1);
+all_energy_costs= cell(length(signals_train), 1);
+all_entropies = cell(length(signals_train), 1);
+all_feature_sets = cell(length(signals_train), 1);
+errors = cell(length(signals_train), 1);
+
+averaged_error = 0;
+for n = 1 : 100
+	outlier_errors = cell(length(signals_train), 1);
+	for i = 1 : length(signals_train)
+		true_outliers = context_train{i};
+		outlier_pred = randi([1, 6], size(true_outliers));
+
+		outlier_pred = (outlier_pred == 6);
+		true_outliers = (true_outliers == 6);
+
+		outlier_errors{i} = (outlier_pred ~= true_outliers);
+	end
+	all_err = vertcat(outlier_errors{:});
+	total_error = sum(all_err)/length(all_err);
+	averaged_error = averaged_error + total_error;
+end
+
+averaged_error = averaged_error/100;
+	
 for i = 1 : length(signals_train)
 	signal = signals_train{i};
 	time = 1 : size(signal, 1);
 	true_context = context_train{i};
 	
-	[predicted_context, alpha_prob, energy_costs, entropies, feature_sets] = context_uncertainty(signal, time, model, pred_lag, max_duration, i, energy_cost);
-	disp(sum(predicted_context == true_context)/length(true_context));
-	% Remark: 75% accuracy just single point likelihood (105/302 wrong)
-	
-	all_predictions{i} = predicted_context;
-	all_alpha_prob{i} = alpha_prob;
-	
-% 	state_prob = condexp(alpha_prob')';
-	
+	[context_pred, alpha_prob, entropies] = unknown_context(signal, time, model, pred_lag, max_duration, i, threshold);
+    
+	errors{i} = (context_pred ~= true_context);
+	all_predictions{i} = context_pred;
+	all_alpha_prob{i} = alpha_prob;    
+	all_entropies{i} = entropies;
 	
 end
+
+for i = 1 : length(signals_train)
+	outlier_pred = all_predictions{i};
+	true_outliers = context_train{i};
+	
+	outlier_pred = (outlier_pred == 6);
+	true_outliers = (true_outliers == 6);
+	
+	outlier_errors{i} = (outlier_pred ~= true_outliers);
+end
+
+save('../Results/MTGP_mattern5/context_predictions.mat', 'all_predictions');
+save('../Results/MTGP_mattern5/context_entropies.mat', 'all_entropies');
+save('../Results/MTGP_mattern5/context_probabilities.mat', 'all_alpha_prob');
+save('../Results/MTGP_mattern5/outlier_errors.mat', 'outlier_errors');
 
 data_ratio = 4;
 num_features = 10;
